@@ -897,8 +897,9 @@ func getUserItems(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 	json.NewEncoder(w).Encode(rui)
 }
-
 func getTransactions(w http.ResponseWriter, r *http.Request) {
+	defer measure.Start("getTransactions:all").Stop()
+	m := measure.Start("getTransactions:part1")
 
 	user, errCode, errMsg := getUser(r)
 	if errMsg != "" {
@@ -927,6 +928,9 @@ func getTransactions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	m.Stop()
+	m = measure.Start("getTransactions:part2")
 
 	tx := dbx.MustBegin()
 	items := []Item{}
@@ -972,6 +976,9 @@ func getTransactions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	m.Stop()
+	m = measure.Start("getTransactions:part3")
 
 	itemDetails := []ItemDetail{}
 	for _, item := range items {
@@ -1061,6 +1068,9 @@ func getTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 	tx.Commit()
 
+	m.Stop()
+	m = measure.Start("getTransactions:part4")
+
 	hasNext := false
 	if len(itemDetails) > TransactionsPerPage {
 		hasNext = true
@@ -1075,6 +1085,7 @@ func getTransactions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 	json.NewEncoder(w).Encode(rts)
 
+	m.Stop()
 }
 
 func getItem(w http.ResponseWriter, r *http.Request) {
