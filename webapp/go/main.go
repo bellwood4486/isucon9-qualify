@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/najeira/measure"
 	"html/template"
+	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +25,7 @@ import (
 	goji "goji.io"
 	"goji.io/pat"
 	"golang.org/x/crypto/bcrypt"
+
 )
 
 const (
@@ -64,6 +69,50 @@ var (
 	dbx       *sqlx.DB
 	store     sessions.Store
 )
+
+// 計測時間データ型
+type MyLog struct {
+	Key   string
+	Count int64
+	Sum   float64
+	Min   float64
+	Max   float64
+	Avg   float64
+	Rate  float64
+	P95   float64
+}
+
+func getStats(w http.ResponseWriter, r *http.Request) {
+	stats := measure.GetStats()
+	stats.SortDesc("sum")
+	var logs []MyLog
+	for _, s := range stats {
+		log := MyLog{
+			Key:   s.Key,
+			Count: s.Count,
+			Sum:   math.Round(s.Sum),
+			Min:   (math.Round(s.Min*100) / 100),
+			Max:   (math.Round(s.Max*100) / 100),
+			Avg:   (math.Round(s.Avg*100) / 100),
+			Rate:  (math.Round(s.Rate*100) / 100),
+			P95:   (math.Round(s.P95*100) / 100),
+		}
+		logs = append(logs, log)
+	}
+	body := bytes.NewBufferString("key,count,sum,avg\n")
+	for _, s := range logs {
+		body.WriteString(fmt.Sprintf("%s,%d,%f,%f\n",
+			s.Key, s.Count, s.Sum, s.Avg))
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=UTF-8")
+	t := time.Now().Format("20060102_150405")
+	disp := "attachment; filename=\"" + t + "_log.csv\""
+	w.Header().Set("Content-Disposition", disp)
+	_, err := io.Copy(w, body)
+	if err != nil {
+		panic(err)
+	}
+}
 
 type Config struct {
 	Name string `json:"name" db:"name"`
@@ -354,6 +403,8 @@ func main() {
 	mux.HandleFunc(pat.Get("/transactions/:transaction_id"), getIndex)
 	mux.HandleFunc(pat.Get("/users/:user_id"), getIndex)
 	mux.HandleFunc(pat.Get("/users/setting"), getIndex)
+	mux.HandleFunc(pat.Get("/stats"), getStats)
+
 	// Assets
 	mux.Handle(pat.Get("/*"), http.FileServer(http.Dir("../public")))
 	log.Fatal(http.ListenAndServe(":8000", mux))
@@ -599,6 +650,9 @@ func getNewItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func getNewCategoryItems(w http.ResponseWriter, r *http.Request) {
+	defer measure.Start("getNewCategoryItems:all").Stop()
+	m := measure.Start("getNewCategoryItems:part1")
+
 	rootCategoryIDStr := pat.Param(r, "root_category_id")
 	rootCategoryID, err := strconv.Atoi(rootCategoryIDStr)
 	if err != nil || rootCategoryID <= 0 {
@@ -685,6 +739,9 @@ func getNewCategoryItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	m.Stop()
+	m = measure.Start("getNewCategoryItems:part2")
+
 	itemSimples := []ItemSimple{}
 	for _, item := range items {
 		seller, err := getUserSimpleByID(dbx, item.SellerID)
@@ -711,6 +768,9 @@ func getNewCategoryItems(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	m.Stop()
+	m = measure.Start("getNewCategoryItems:part3")
+
 	hasNext := false
 	if len(itemSimples) > ItemsPerPage {
 		hasNext = true
@@ -727,6 +787,7 @@ func getNewCategoryItems(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 	json.NewEncoder(w).Encode(rni)
 
+	m.Stop()
 }
 
 func getUserItems(w http.ResponseWriter, r *http.Request) {
